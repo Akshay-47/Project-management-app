@@ -1,5 +1,6 @@
 # Keep agent instructions, decision records, and learning materials local.
 *.md
+!.github/ISSUE_TEMPLATE/*.yml
 assets/
 lessons/
 reference/

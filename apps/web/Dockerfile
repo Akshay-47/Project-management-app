@@ -3,13 +3,13 @@ WORKDIR /app
 COPY package*.json ./
 COPY apps/web/package.json ./apps/web/package.json
 COPY apps/api/package.json ./apps/api/package.json
-RUN npm install
+RUN npm ci
 COPY apps/web ./apps/web
 ARG VITE_API_BASE_URL=http://localhost:3000/v1
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 RUN npm run build --workspace @flowboard/web
 
-FROM nginx:1.27-alpine
+FROM nginxinc/nginx-unprivileged:stable-alpine
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
-EXPOSE 80
+EXPOSE 8080
