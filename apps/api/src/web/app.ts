@@ -1,9 +1,11 @@
 import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
 import Fastify, { type FastifyRequest } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '../db.js';
-import { resolveFields, resolveStatuses } from '../domain/configuration.js';
+import { canAccessContainerChain } from '../domain/authorization.js';
+import { hasRequiredStatusCategories, resolveFields, resolveStatuses } from '../domain/configuration.js';
 import { validateTaskConfiguration } from '../domain/task-validation.js';
 import { AppError } from './errors.js';
 
@@ -63,14 +65,8 @@ async function requireContainerAccess(user: NonNullable<RequestWithUser['current
     chain.unshift(current);
     currentId = current.parentId;
   }
-  if (user.role === 'admin') return chain;
-
-  for (const container of chain) {
-    const grant = container.grants.find((item) => item.userId === user.id);
-    if (grant?.mode === 'deny') throw new AppError(403, 'FORBIDDEN', 'You do not have access to this container.');
-    if (container.visibility === 'private' && grant?.mode !== 'allow') {
-      throw new AppError(403, 'FORBIDDEN', 'This private container requires an explicit access grant.');
-    }
+  if (!canAccessContainerChain(user.role, user.id, chain)) {
+    throw new AppError(403, 'FORBIDDEN', 'You do not have access to this container or one of its ancestors.');
   }
   return chain;
 }
@@ -137,11 +133,11 @@ async function statusKeyIsInUse(ownerId: string, key: string) {
   }));
 }
 
-async function fieldKeyIsInUse(ownerId: string, key: string) {
+async function fieldKeyIsInUse(ownerId: string, key: string, required: boolean) {
   const listIds = await descendantListIds(ownerId);
   if (!listIds.length) return false;
   const tasks = await prisma.task.findMany({ where: { primaryListId: { in: listIds }, archivedAt: null }, select: { customValues: true } });
-  return tasks.some((task) => task.customValues !== null && typeof task.customValues === 'object' && !Array.isArray(task.customValues) && Object.hasOwn(task.customValues, key));
+  return tasks.some((task) => required || (task.customValues !== null && typeof task.customValues === 'object' && !Array.isArray(task.customValues) && Object.hasOwn(task.customValues, key)));
 }
 
 async function visibleTree(user: NonNullable<RequestWithUser['currentUser']>) {
@@ -149,24 +145,24 @@ async function visibleTree(user: NonNullable<RequestWithUser['currentUser']>) {
   const byId = new Map(all.map((container) => [container.id, container]));
   const visible = new Set<string>();
   for (const container of all) {
+    const chain: typeof all = [];
     let cursor: (typeof all)[number] | undefined = container;
-    let allowed = true;
     while (cursor) {
-      if (cursor.archivedAt) allowed = false;
-      if (user.role !== 'admin') {
-        const grant = cursor.grants.find((item) => item.userId === user.id);
-        if (grant?.mode === 'deny' || (cursor.visibility === 'private' && grant?.mode !== 'allow')) allowed = false;
-      }
+      chain.unshift(cursor);
       cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
     }
-    if (allowed) visible.add(container.id);
+    if (canAccessContainerChain(user.role, user.id, chain)) visible.add(container.id);
   }
   return all.filter((container) => !container.archivedAt && visible.has(container.id)).map(({ grants: _grants, ...container }) => container);
 }
 
 export async function buildApp(options: { logger?: boolean } = {}) {
   const app = Fastify({ logger: options.logger ?? true, bodyLimit: 1_048_576 });
-  await app.register(cors, { origin: true });
+  const allowedOrigins = new Set((process.env.CORS_ORIGINS ?? 'http://localhost:8080,http://localhost:5173').split(',').map((origin) => origin.trim()).filter(Boolean));
+  await app.register(helmet);
+  await app.register(cors, {
+    origin: (origin, callback) => callback(null, origin === undefined || allowedOrigins.has(origin)),
+  });
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof AppError) {
@@ -290,6 +286,17 @@ export async function buildApp(options: { logger?: boolean } = {}) {
     const duplicate = await prisma.statusDefinition.findUnique({ where: { ownerId_key: { ownerId: id, key: body.key } }, select: { id: true } });
     if (duplicate) throw new AppError(409, 'STATUS_KEY_EXISTS', 'A status with this key already exists at this scope.');
     if (await statusKeyIsInUse(id, body.key)) throw new AppError(409, 'STATUS_IN_USE', 'Tasks use this status key. Move those tasks before overriding or disabling it.');
+    for (const listId of await descendantListIds(id)) {
+      const configuration = await resolvedConfiguration(listId);
+      const ownerIndex = configuration.ancestors.findIndex((container) => container.id === id);
+      if (ownerIndex < 0) continue;
+      const nearerOwnerIds = configuration.ancestors.slice(ownerIndex + 1).map((container) => container.id);
+      const nearerOverride = nearerOwnerIds.length ? await prisma.statusDefinition.findFirst({ where: { ownerId: { in: nearerOwnerIds }, key: body.key }, select: { id: true } }) : null;
+      if (nearerOverride) continue;
+      const statuses = configuration.statuses.filter((status) => status.key !== body.key);
+      if (!body.disabled) statuses.push({ id: 'pending-status', key: body.key, name: body.name, category: body.category, color: body.color ?? '#64748b', position: body.position ?? 0, disabled: false });
+      if (!hasRequiredStatusCategories(statuses)) throw new AppError(409, 'STATUS_CATEGORY_REQUIRED', 'Every affected list must retain at least one not-started, active, and done status.');
+    }
     const status = await prisma.statusDefinition.create({ data: { ownerId: id, ...body, color: body.color ?? '#64748b', position: body.position ?? 0, disabled: body.disabled ?? false } });
     return reply.status(201).send({ data: status });
   });
@@ -304,7 +311,7 @@ export async function buildApp(options: { logger?: boolean } = {}) {
     if (['single_select', 'multi_select'].includes(body.type) && !body.options?.length) badRequest('Select fields require at least one option.');
     const duplicate = await prisma.customFieldDefinition.findUnique({ where: { ownerId_key: { ownerId: id, key: body.key } }, select: { id: true } });
     if (duplicate) throw new AppError(409, 'FIELD_KEY_EXISTS', 'A field with this key already exists at this scope.');
-    if (await fieldKeyIsInUse(id, body.key)) throw new AppError(409, 'FIELD_IN_USE', 'Tasks have values for this field. Migrate or clear them before overriding it.');
+    if (await fieldKeyIsInUse(id, body.key, body.required ?? false)) throw new AppError(409, 'FIELD_IN_USE', 'Tasks depend on this field. Migrate or clear their values before overriding it or making it required.');
     const field = await prisma.customFieldDefinition.create({ data: { ownerId: id, ...body, options: body.options ?? [], required: body.required ?? false, position: body.position ?? 0 } });
     return reply.status(201).send({ data: field });
   });

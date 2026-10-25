@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveFields, resolveStatuses, type Owned, type StatusDefinition } from './configuration.js';
+import { hasRequiredStatusCategories, resolveFields, resolveStatuses, type Owned, type StatusDefinition } from './configuration.js';
 
 const status = (id: string, key: string, name: string, position: number, disabled = false): Owned<StatusDefinition> => ({
   ownerId: id,
@@ -25,6 +25,16 @@ describe('resolved configuration', () => {
       status('list', 'todo', 'To do', 0, true),
     ]);
     expect(result).toEqual([]);
+  });
+
+  it('requires every resolved set to retain not-started, active, and done categories', () => {
+    const complete = [
+      { ...status('workspace', 'todo', 'To do', 0).definition, category: 'not_started' as const },
+      status('workspace', 'doing', 'Doing', 1).definition,
+      { ...status('workspace', 'done', 'Done', 2).definition, category: 'done' as const },
+    ];
+    expect(hasRequiredStatusCategories(complete)).toBe(true);
+    expect(hasRequiredStatusCategories(complete.slice(0, 2))).toBe(false);
   });
 
   it('resolves inherited custom fields by key with nearest owner winning', () => {

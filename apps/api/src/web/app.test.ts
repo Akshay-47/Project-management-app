@@ -1,5 +1,6 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from './app.js';
+import { prisma } from '../db.js';
 
 const appPromise = buildApp({ logger: false });
 
@@ -20,6 +21,26 @@ describe('HTTP boundary', () => {
     expect(response.json()).toEqual({
       error: { code: 'UNAUTHENTICATED', message: 'Send x-user-id with a seeded user ID.' },
     });
+  });
+
+  it('returns malformed request bodies as 400 with field details instead of 500', async () => {
+    const findUser = vi.spyOn(prisma.user, 'findUnique').mockResolvedValue({
+      id: 'user-alice', userKey: 'alice', displayName: 'Alice Chen', role: 'admin', createdAt: new Date(),
+    });
+    const app = await appPromise;
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/containers',
+      headers: { 'x-user-id': 'alice' },
+      payload: { name: '', type: 'space' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe('VALIDATION_ERROR');
+    expect(response.json().error.details).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'name' }),
+    ]));
+    findUser.mockRestore();
   });
 });
 

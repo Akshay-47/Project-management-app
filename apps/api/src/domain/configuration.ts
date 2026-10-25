@@ -40,6 +40,11 @@ export function resolveStatuses(ancestorFirst: readonly Owned<StatusDefinition>[
     .sort((left, right) => left.position - right.position || left.key.localeCompare(right.key));
 }
 
+export function hasRequiredStatusCategories(statuses: readonly StatusDefinition[]) {
+  const categories = new Set(statuses.map((status) => status.category));
+  return categories.has('not_started') && categories.has('active') && categories.has('done');
+}
+
 export function resolveFields(ancestorFirst: readonly Owned<FieldDefinition>[]): FieldDefinition[] {
   return resolveByKey(ancestorFirst)
     .filter((field) => field.archivedAt === null)
