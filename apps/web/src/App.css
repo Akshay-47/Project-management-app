@@ -83,6 +83,8 @@ h1 { margin: 0; color: #292a3d; font-size: clamp(25px,3vw,31px); font-weight: 72
 .view-tabs button { height: 32px; display: inline-flex; align-items: center; gap: 7px; padding: 0 11px; border: 0; border-radius: 6px; background: transparent; color: #858697; font: inherit; font-size: 10px; cursor: pointer; }
 .view-tabs button.active { background: #efedff; color: #6153c6; font-weight: 700; }
 .toolbar-controls { display: flex; align-items: center; gap: 7px; }
+.sort-control { height: 32px; display: inline-flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid #e9e9ef; border-radius: 7px; background: white; color: #77798a; font-size: 9px; }
+.sort-control select { max-width: 110px; border: 0; background: transparent; color: #55576b; font: inherit; font-size: 9px; }
 .secondary-button:hover { background: #f8f7fc; color: #5e50c6; }
 .secondary-button:disabled { opacity: .5; cursor: not-allowed; }
 .more-button { border: 1px solid #e9e9ef; }
