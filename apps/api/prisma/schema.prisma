@@ -1,0 +1,160 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ContainerType {
+  workspace
+  space
+  folder
+  list
+}
+
+enum Visibility {
+  public
+  private
+}
+
+enum GrantMode {
+  allow
+  deny
+}
+
+enum StatusCategory {
+  not_started
+  active
+  done
+  closed
+}
+
+enum FieldType {
+  text
+  number
+  single_select
+  multi_select
+  date
+  checkbox
+}
+
+enum Priority {
+  urgent
+  high
+  normal
+  low
+  none
+}
+
+enum UserRole {
+  admin
+  member
+}
+
+model User {
+  id          String   @id @default(cuid())
+  userKey     String   @unique
+  displayName String
+  role        UserRole @default(member)
+  createdAt   DateTime @default(now())
+  grants      ContainerGrant[]
+  assigned    TaskAssignee[]
+}
+
+model Container {
+  id          String        @id @default(cuid())
+  type        ContainerType
+  name        String
+  parentId    String?
+  position    Int           @default(0)
+  visibility  Visibility    @default(public)
+  archivedAt DateTime?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  parent      Container?    @relation("ContainerTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children    Container[]   @relation("ContainerTree")
+  grants      ContainerGrant[]
+  statuses    StatusDefinition[]
+  fields      CustomFieldDefinition[]
+  tasks       Task[]
+
+  @@index([parentId, position])
+  @@index([type, archivedAt])
+}
+
+model ContainerGrant {
+  id          String    @id @default(cuid())
+  containerId String
+  userId      String
+  mode        GrantMode
+  container   Container @relation(fields: [containerId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([containerId, userId])
+  @@index([userId, mode])
+}
+
+model StatusDefinition {
+  id          String         @id @default(cuid())
+  ownerId     String
+  key         String
+  name        String
+  category    StatusCategory
+  color       String         @default("#64748b")
+  position    Int            @default(0)
+  disabled    Boolean        @default(false)
+  owner       Container      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  tasks       Task[]
+
+  @@unique([ownerId, key])
+  @@index([ownerId, position])
+}
+
+model CustomFieldDefinition {
+  id          String       @id @default(cuid())
+  ownerId     String
+  key         String
+  name        String
+  type        FieldType
+  required    Boolean      @default(false)
+  options     Json         @default("[]")
+  position    Int          @default(0)
+  archivedAt DateTime?
+  owner       Container    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, key])
+  @@index([ownerId, position])
+}
+
+model Task {
+  id            String         @id @default(cuid())
+  primaryListId String
+  statusId      String
+  title         String         @db.VarChar(500)
+  description   String?
+  priority      Priority       @default(none)
+  dueDate       DateTime?
+  customValues  Json           @default("{}")
+  position      Int            @default(0)
+  archivedAt    DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  primaryList   Container      @relation(fields: [primaryListId], references: [id], onDelete: Restrict)
+  status        StatusDefinition @relation(fields: [statusId], references: [id], onDelete: Restrict)
+  assignees     TaskAssignee[]
+
+  @@index([primaryListId, statusId, position])
+  @@index([primaryListId, updatedAt])
+}
+
+model TaskAssignee {
+  taskId String
+  userId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, userId])
+  @@index([userId, taskId])
+}

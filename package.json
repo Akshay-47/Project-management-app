@@ -1,0 +1,24 @@
+{
+  "name": "flowboard",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @flowboard/api & npm run dev --workspace @flowboard/web",
+    "build": "npm run build --workspace @flowboard/api && npm run build --workspace @flowboard/web",
+    "typecheck": "npm run typecheck --workspace @flowboard/api && npm run typecheck --workspace @flowboard/web",
+    "lint": "npm run lint --workspace @flowboard/api && npm run lint --workspace @flowboard/web",
+    "test": "npm run test --workspace @flowboard/api && npm run test --workspace @flowboard/web",
+    "db:generate": "npm run db:generate --workspace @flowboard/api",
+    "db:migrate": "npm run db:migrate --workspace @flowboard/api",
+    "db:seed": "npm run db:seed --workspace @flowboard/api"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.2": true,
+    "prisma@6.19.3": true
+  }
+}
