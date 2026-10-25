@@ -1,0 +1,15 @@
+# Keep agent instructions, decision records, and learning materials local.
+*.md
+assets/
+lessons/
+reference/
+
+# Local issue/spec scratch space and generated outputs.
+.scratch/
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+.DS_Store
