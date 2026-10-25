@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   ApiError,
+  archiveContainer,
   archiveTask,
+  createContainer,
   createField,
   createStatus,
   createTask,
@@ -9,6 +11,7 @@ import {
   getListConfiguration,
   getTasks,
   getTree,
+  patchContainer,
   updateTask,
   type Container,
   type FieldDefinition,
@@ -29,6 +32,12 @@ const USERS = [
 
 const PRIORITIES: Priority[] = ['urgent', 'high', 'normal', 'low', 'none']
 const PRIORITY_ORDER: Record<Priority, number> = { urgent: 0, high: 1, normal: 2, low: 3, none: 4 }
+
+const CHILD_TYPE: Record<string, 'space' | 'folder' | 'list'> = {
+  workspace: 'space',
+  space: 'folder',
+  folder: 'list',
+}
 
 function childrenOf(containers: Container[], parentId: string | null) {
   return containers.filter((container) => container.parentId === parentId)
@@ -72,6 +81,15 @@ function App() {
   const [createValues, setCreateValues] = useState<Record<string, unknown>>({})
   const [createStatusId, setCreateStatusId] = useState('')
   const [sortBy, setSortBy] = useState<'position' | 'dueDate' | 'priority'>('position')
+
+  // Container management state
+  const [containerDialog, setContainerDialog] = useState<{
+    mode: 'create' | 'rename'
+    parentId: string | null
+    parentType: string
+    container?: Container
+  } | null>(null)
+  const [containerMenuId, setContainerMenuId] = useState<string | null>(null)
 
   const selectedList = containers.find((item) => item.id === selectedListId) ?? null
   const visibleLists = containers.filter((item) => item.type === 'list')
@@ -204,6 +222,34 @@ function App() {
     await changeTask(task, { statusId, position: lastPosition + 1 })
   }
 
+  async function reloadTree() {
+    const tree = await getTree(userKey)
+    setContainers(tree)
+    // if selected list was archived, fall back to first available
+    if (selectedListId && !tree.some((item) => item.id === selectedListId)) {
+      const first = tree.find((item) => item.type === 'list')
+      setSelectedListId(first?.id ?? null)
+    }
+  }
+
+  async function handleCreateContainer(name: string, type: 'space' | 'folder' | 'list', parentId: string | null, visibility: 'public' | 'private') {
+    await createContainer(userKey, { name, type, parentId, visibility })
+    await reloadTree()
+    setContainerDialog(null)
+  }
+
+  async function handleRenameContainer(id: string, name: string) {
+    await patchContainer(userKey, id, { name })
+    await reloadTree()
+    setContainerDialog(null)
+  }
+
+  async function handleArchiveContainer(container: Container) {
+    if (!window.confirm(`Archive "${container.name}"? Its tasks will be hidden but not deleted.`)) return
+    await archiveContainer(userKey, container.id)
+    await reloadTree()
+  }
+
   return (
     <div className="flowboard-shell">
       <aside className="sidebar">
@@ -213,17 +259,76 @@ function App() {
         <nav className="workspace-tree" aria-label="Workspace lists">
           {containers.filter((item) => item.type === 'space').map((space) => (
             <section className="tree-space" key={space.id}>
-              <div className="tree-heading"><span className="tree-caret">⌄</span><span className="space-dot" />{space.name}<button type="button" className="icon-button tree-add" aria-label={`Add to ${space.name}`}>＋</button></div>
+              <div className="tree-heading">
+                <span className="tree-caret">⌄</span><span className="space-dot" />{space.name}
+                {user?.role === 'admin' && (
+                  <>
+                    <button type="button" className="icon-button tree-add" aria-label={`Add folder to ${space.name}`}
+                      onClick={() => setContainerDialog({ mode: 'create', parentId: space.id, parentType: 'space' })}>＋</button>
+                    <button type="button" className="icon-button tree-add" aria-label={`Options for ${space.name}`}
+                      onClick={() => setContainerMenuId(containerMenuId === space.id ? null : space.id)}>···</button>
+                    {containerMenuId === space.id && (
+                      <ContainerMenu
+                        onRename={() => { setContainerMenuId(null); setContainerDialog({ mode: 'rename', parentId: space.parentId, parentType: 'workspace', container: space }) }}
+                        onArchive={() => { setContainerMenuId(null); void handleArchiveContainer(space) }}
+                        onClose={() => setContainerMenuId(null)}
+                      />
+                    )}
+                  </>
+                )}
+              </div>
               {childrenOf(containers, space.id).map((folder) => (
                 <div className="tree-folder" key={folder.id}>
-                  <div className="tree-heading folder-heading"><span className="tree-caret">⌄</span><span className="folder-icon">▰</span>{folder.name}</div>
+                  <div className="tree-heading folder-heading">
+                    <span className="tree-caret">⌄</span><span className="folder-icon">▰</span>{folder.name}
+                    {user?.role === 'admin' && (
+                      <>
+                        <button type="button" className="icon-button tree-add" aria-label={`Add list to ${folder.name}`}
+                          onClick={() => setContainerDialog({ mode: 'create', parentId: folder.id, parentType: 'folder' })}>＋</button>
+                        <button type="button" className="icon-button tree-add" aria-label={`Options for ${folder.name}`}
+                          onClick={() => setContainerMenuId(containerMenuId === folder.id ? null : folder.id)}>···</button>
+                        {containerMenuId === folder.id && (
+                          <ContainerMenu
+                            onRename={() => { setContainerMenuId(null); setContainerDialog({ mode: 'rename', parentId: folder.parentId, parentType: 'space', container: folder }) }}
+                            onArchive={() => { setContainerMenuId(null); void handleArchiveContainer(folder) }}
+                            onClose={() => setContainerMenuId(null)}
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
                   {childrenOf(containers, folder.id).map((list) => (
-                    <button type="button" key={list.id} className={`tree-list ${selectedListId === list.id ? 'selected' : ''}`} onClick={() => { setLoading(true); setError(null); setTasks([]); setSelectedListId(list.id) }}><span className="list-icon">☷</span><span>{list.name}</span><span className="tree-count">{selectedListId === list.id ? tasks.length : ''}</span></button>
+                    <div key={list.id} className="tree-list-row">
+                      <button type="button" className={`tree-list ${selectedListId === list.id ? 'selected' : ''}`} onClick={() => { setLoading(true); setError(null); setTasks([]); setSelectedListId(list.id) }}
+                        aria-label={list.name}>
+                        <span className="list-icon">☷</span><span>{list.name}</span>
+                        <span className="tree-count">{selectedListId === list.id ? tasks.length : ''}</span>
+                      </button>
+                      {user?.role === 'admin' && (
+                        <>
+                          <button type="button" className="icon-button tree-add list-options" aria-label={`Options for ${list.name}`}
+                            onClick={(e) => { e.stopPropagation(); setContainerMenuId(containerMenuId === list.id ? null : list.id) }}>···</button>
+                          {containerMenuId === list.id && (
+                            <ContainerMenu
+                              onRename={() => { setContainerMenuId(null); setContainerDialog({ mode: 'rename', parentId: list.parentId, parentType: 'folder', container: list }) }}
+                              onArchive={() => { setContainerMenuId(null); void handleArchiveContainer(list) }}
+                              onClose={() => setContainerMenuId(null)}
+                            />
+                          )}
+                        </>
+                      )}
+                    </div>
                   ))}
                 </div>
               ))}
             </section>
           ))}
+          {user?.role === 'admin' && (
+            <button type="button" className="sidebar-link add-space-button"
+              onClick={() => setContainerDialog({ mode: 'create', parentId: null, parentType: 'workspace' })}>
+              ＋ Add space
+            </button>
+          )}
         </nav>
         <div className="sidebar-bottom"><button className="sidebar-link" type="button"><span>⚙</span> Settings</button><div className="profile-card"><div className="avatar avatar-plum">{user ? initials(user.displayName) : 'FB'}</div><span className="profile-info"><strong>{user?.displayName ?? 'Loading user'}</strong><small>{user?.role === 'admin' ? 'Workspace admin' : 'Team member'}</small></span><button type="button" className="icon-button" aria-label="Profile menu">···</button></div></div>
       </aside>
@@ -247,6 +352,16 @@ function App() {
       {selectedTask && <TaskDrawer task={selectedTask} statuses={statuses} fields={fields} saving={saving} error={error} onClose={() => setSelectedTask(null)} onSave={saveTaskDetails} onArchive={() => void handleArchiveTask(selectedTask)} />}
       {showCreateTask && selectedList && <CreateTaskDialog title={newTaskTitle} setTitle={setNewTaskTitle} statuses={statuses} statusId={createStatusId || statuses[0]?.id || ''} setStatusId={setCreateStatusId} fields={fields} values={createValues} setValues={setCreateValues} saving={saving} error={error} onClose={() => setShowCreateTask(false)} onSubmit={handleCreateTask} />}
       {showConfiguration && selectedListId && <ConfigurationDialog userKey={userKey} scopes={configurationScopes(containers, selectedListId)} saving={saving} onClose={() => setShowConfiguration(false)} onCreated={reloadTasks} />}
+      {containerDialog && (
+        <ContainerDialog
+          mode={containerDialog.mode}
+          parentType={containerDialog.parentType}
+          container={containerDialog.container}
+          onClose={() => setContainerDialog(null)}
+          onCreate={(name, visibility) => void handleCreateContainer(name, CHILD_TYPE[containerDialog.parentType] ?? 'list', containerDialog.parentId, visibility)}
+          onRename={(name) => containerDialog.container ? void handleRenameContainer(containerDialog.container.id, name) : undefined}
+        />
+      )}
     </div>
   )
 }
@@ -339,6 +454,84 @@ function ConfigurationDialog({ userKey, scopes, saving, onClose, onCreated }: { 
   }
 
   return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="config-dialog" role="dialog" aria-modal="true" aria-label="List configuration"><header className="drawer-header"><div><h2>List configuration</h2><p>Define statuses and fields at a scope; child lists inherit them.</p></div><button className="icon-button" type="button" aria-label="Close configuration" onClick={onClose}>×</button></header><div className="config-body"><label className="form-field"><span className="field-label">Configuration scope</span><select value={scopeId} onChange={(event) => setScopeId(event.target.value)}>{scopes.map((scope) => <option key={scope.id} value={scope.id}>{scope.name} · {scope.type}</option>)}</select></label>{message && <div className="success-banner" role="status">{message}</div>}{formError && <div className="error-banner" role="alert">{formError}</div>}<form className="config-form" onSubmit={submitStatus}><h3>Add a status</h3><label className="form-field"><span className="field-label">Stable key</span><input name="key" required pattern="[a-z][a-z0-9_]{1,49}" placeholder="in_review" /></label><label className="form-field"><span className="field-label">Display name</span><input name="name" required maxLength={80} placeholder="In review" /></label><div className="config-form-row"><label className="form-field"><span className="field-label">Category</span><select name="category"><option value="not_started">Not started</option><option value="active">Active</option><option value="done">Done</option><option value="closed">Closed</option></select></label><label className="form-field"><span className="field-label">Color</span><input name="color" type="color" defaultValue="#7c69e8" /></label></div><button className="secondary-button" type="submit" disabled={saving}>＋ Add status at this scope</button></form><form className="config-form" onSubmit={submitField}><h3>Add a custom field</h3><label className="form-field"><span className="field-label">Stable key</span><input name="key" required pattern="[a-z][a-z0-9_]{1,49}" placeholder="release_train" /></label><label className="form-field"><span className="field-label">Display name</span><input name="name" required maxLength={80} placeholder="Release train" /></label><label className="form-field"><span className="field-label">Type</span><select name="type"><option value="text">Text</option><option value="number">Number</option><option value="single_select">Single select</option><option value="multi_select">Multi select</option><option value="date">Date</option><option value="checkbox">Checkbox</option></select></label><label className="form-field"><span className="field-label">Select options, comma separated</span><input name="options" placeholder="Alpha, Beta" /></label><label className="checkbox-row"><input name="required" type="checkbox" /> Required for tasks in descendant lists</label><button className="secondary-button" type="submit" disabled={saving}>＋ Add custom field at this scope</button></form><p className="config-note">Changing an in-use status or field is blocked to protect task data. Additions inherit to descendant lists; same-key overrides are permitted only when unused.</p></div></section></div>
+}
+
+function ContainerMenu({ onRename, onArchive, onClose }: { onRename: () => void; onArchive: () => void; onClose: () => void }) {
+  return (
+    <div className="container-menu" role="menu" onMouseLeave={onClose}>
+      <button type="button" role="menuitem" className="container-menu-item" onClick={onRename}>Rename</button>
+      <button type="button" role="menuitem" className="container-menu-item container-menu-danger" onClick={onArchive}>Archive</button>
+    </div>
+  )
+}
+
+function ContainerDialog({ mode, parentType, container, onClose, onCreate, onRename }: {
+  mode: 'create' | 'rename'
+  parentType: string
+  container?: Container
+  onClose: () => void
+  onCreate: (name: string, visibility: 'public' | 'private') => void
+  onRename: (name: string) => void
+}) {
+  const [name, setName] = useState(mode === 'rename' ? (container?.name ?? '') : '')
+  const [visibility, setVisibility] = useState<'public' | 'private'>('public')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const childType = CHILD_TYPE[parentType] ?? 'container'
+  const title = mode === 'create' ? `New ${childType}` : `Rename "${container?.name ?? ''}"`
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!name.trim()) return
+    setSaving(true)
+    setError(null)
+    try {
+      if (mode === 'create') {
+        onCreate(name.trim(), visibility)
+      } else {
+        onRename(name.trim())
+      }
+    } catch (cause: unknown) {
+      setError(cause instanceof Error ? cause.message : 'Could not save.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <section className="create-dialog" role="dialog" aria-modal="true" aria-labelledby="container-dialog-title">
+        <header className="drawer-header">
+          <h2 id="container-dialog-title">{title}</h2>
+          <button className="icon-button" type="button" aria-label="Close" onClick={onClose}>×</button>
+        </header>
+        {error && <div className="error-banner drawer-error" role="alert">{error}</div>}
+        <form onSubmit={handleSubmit}>
+          <div className="drawer-content">
+            <label className="form-field">
+              <span className="field-label">Name</span>
+              <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={120} placeholder={`${childType.charAt(0).toUpperCase()}${childType.slice(1)} name`} autoFocus />
+            </label>
+            {mode === 'create' && (
+              <label className="form-field">
+                <span className="field-label">Visibility</span>
+                <select value={visibility} onChange={(event) => setVisibility(event.target.value as 'public' | 'private')}>
+                  <option value="public">Public — visible to all members</option>
+                  <option value="private">Private — visible only to granted members</option>
+                </select>
+              </label>
+            )}
+          </div>
+          <footer className="drawer-footer">
+            <button type="button" className="secondary-button" onClick={onClose}>Cancel</button>
+            <button type="submit" className="primary-button" disabled={saving || !name.trim()}>
+              {saving ? 'Saving…' : mode === 'create' ? `Create ${childType}` : 'Save name'}
+            </button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  )
 }
 
 export default App

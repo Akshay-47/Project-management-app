@@ -200,3 +200,25 @@ h1 { margin: 0; color: #292a3d; font-size: clamp(25px,3vw,31px); font-weight: 72
   .config-body { grid-template-columns: 1fr; }
   .config-body > .form-field,.config-body > .success-banner,.config-body > .error-banner,.config-note { grid-column: 1; }
 }
+
+/* ── Container management ─────────────────────────────────── */
+.tree-list-row { position: relative; display: flex; align-items: center; }
+.tree-list-row .tree-list { flex: 1; }
+.list-options { opacity: 0; transition: opacity .15s; margin-left: 2px; flex-shrink: 0; }
+.tree-list-row:hover .list-options { opacity: 1; }
+.add-space-button { margin-top: 10px; color: var(--text-muted); font-size: 11px; padding: 6px 10px; border-radius: 6px; width: 100%; text-align: left; }
+.add-space-button:hover { background: var(--surface-hover); color: var(--text); }
+
+.container-menu {
+  position: absolute; top: 100%; left: 0; z-index: 200;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px; min-width: 130px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.18); display: flex; flex-direction: column; gap: 2px;
+}
+.container-menu-item {
+  padding: 7px 10px; border-radius: 5px; font-size: 12px; text-align: left;
+  color: var(--text); background: transparent; cursor: pointer; border: none;
+}
+.container-menu-item:hover { background: var(--surface-hover); }
+.container-menu-danger { color: #ef4444; }
+.container-menu-danger:hover { background: rgba(239,68,68,.1); }

@@ -186,3 +186,35 @@ export async function createField(userKey: string, ownerId: string, definition: 
   })
   return result.data
 }
+
+export async function createContainer(userKey: string, body: {
+  name: string
+  type: 'space' | 'folder' | 'list'
+  parentId?: string | null
+  position?: number
+  visibility?: 'public' | 'private'
+}) {
+  const result = await request<{ data: Container }>(userKey, '/containers', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+  return result.data
+}
+
+export async function patchContainer(userKey: string, id: string, changes: {
+  name?: string
+  position?: number
+  visibility?: 'public' | 'private'
+}) {
+  const result = await request<{ data: Container }>(userKey, `/containers/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  })
+  return result.data
+}
+
+export async function archiveContainer(userKey: string, id: string) {
+  return request<{ data: { id: string; archived: true } }>(userKey, `/containers/${encodeURIComponent(id)}/archive`, {
+    method: 'POST',
+  })
+}

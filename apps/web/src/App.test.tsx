@@ -17,6 +17,9 @@ vi.mock('./api/flowboard', async () => {
     updateTask: vi.fn(),
     createTask: vi.fn(),
     archiveTask: vi.fn(),
+    createContainer: vi.fn(),
+    patchContainer: vi.fn(),
+    archiveContainer: vi.fn(),
   }
 })
 
@@ -64,7 +67,7 @@ describe('Flowboard list workflow', () => {
     render(<App />)
 
     await screen.findByText('Review API contract')
-    fireEvent.click(screen.getByRole('button', { name: /Backlog/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Backlog' }))
     expect(await screen.findByRole('heading', { name: 'Doing' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'To do' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Done' })).toBeInTheDocument()
@@ -90,10 +93,11 @@ describe('Flowboard list workflow', () => {
     vi.mocked(getTasks).mockResolvedValue([])
 
     render(<App />)
-    expect(await screen.findByRole('button', { name: /Roadmap/ })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Roadmap' })).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Demo user'), { target: { value: 'bob' } })
 
-    await waitFor(() => expect(screen.queryByRole('button', { name: /Roadmap/ })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Roadmap' })).not.toBeInTheDocument())
+    expect(getTree).toHaveBeenLastCalledWith('bob')
     expect(getTree).toHaveBeenLastCalledWith('bob')
   })
 })
