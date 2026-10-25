@@ -111,6 +111,39 @@ async function resolvedConfiguration(listId: string) {
   return { list: chain, ancestors, statuses, fields };
 }
 
+async function descendantListIds(ownerId: string) {
+  const containers = await prisma.container.findMany({ where: { archivedAt: null }, select: { id: true, parentId: true, type: true } });
+  const descendantIds = new Set([ownerId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const container of containers) {
+      if (container.parentId && descendantIds.has(container.parentId) && !descendantIds.has(container.id)) {
+        descendantIds.add(container.id);
+        changed = true;
+      }
+    }
+  }
+  return containers.filter((container) => container.type === 'list' && descendantIds.has(container.id)).map((container) => container.id);
+}
+
+async function statusKeyIsInUse(ownerId: string, key: string) {
+  const listIds = await descendantListIds(ownerId);
+  const definitions = await prisma.statusDefinition.findMany({ where: { key }, select: { id: true } });
+  if (!listIds.length || !definitions.length) return false;
+  return Boolean(await prisma.task.findFirst({
+    where: { primaryListId: { in: listIds }, statusId: { in: definitions.map((item) => item.id) }, archivedAt: null },
+    select: { id: true },
+  }));
+}
+
+async function fieldKeyIsInUse(ownerId: string, key: string) {
+  const listIds = await descendantListIds(ownerId);
+  if (!listIds.length) return false;
+  const tasks = await prisma.task.findMany({ where: { primaryListId: { in: listIds }, archivedAt: null }, select: { customValues: true } });
+  return tasks.some((task) => task.customValues !== null && typeof task.customValues === 'object' && !Array.isArray(task.customValues) && Object.hasOwn(task.customValues, key));
+}
+
 async function visibleTree(user: NonNullable<RequestWithUser['currentUser']>) {
   const all = await prisma.container.findMany({ orderBy: [{ position: 'asc' }, { name: 'asc' }], include: { grants: true } });
   const byId = new Map(all.map((container) => [container.id, container]));
@@ -254,6 +287,9 @@ export async function buildApp(options: { logger?: boolean } = {}) {
     const body = z.object({ key: z.string().regex(/^[a-z][a-z0-9_]{1,49}$/), name: z.string().trim().min(1).max(80), category: z.enum(['not_started', 'active', 'done', 'closed']), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(), position: z.number().int().min(0).optional(), disabled: z.boolean().optional() }).parse(request.body);
     const owner = await prisma.container.findUnique({ where: { id } });
     if (!owner || !['space', 'folder', 'list'].includes(owner.type)) badRequest('Statuses can be configured on a space, folder, or list.');
+    const duplicate = await prisma.statusDefinition.findUnique({ where: { ownerId_key: { ownerId: id, key: body.key } }, select: { id: true } });
+    if (duplicate) throw new AppError(409, 'STATUS_KEY_EXISTS', 'A status with this key already exists at this scope.');
+    if (await statusKeyIsInUse(id, body.key)) throw new AppError(409, 'STATUS_IN_USE', 'Tasks use this status key. Move those tasks before overriding or disabling it.');
     const status = await prisma.statusDefinition.create({ data: { ownerId: id, ...body, color: body.color ?? '#64748b', position: body.position ?? 0, disabled: body.disabled ?? false } });
     return reply.status(201).send({ data: status });
   });
@@ -266,6 +302,9 @@ export async function buildApp(options: { logger?: boolean } = {}) {
     const owner = await prisma.container.findUnique({ where: { id } });
     if (!owner || !['space', 'folder', 'list'].includes(owner.type)) badRequest('Fields can be configured on a space, folder, or list.');
     if (['single_select', 'multi_select'].includes(body.type) && !body.options?.length) badRequest('Select fields require at least one option.');
+    const duplicate = await prisma.customFieldDefinition.findUnique({ where: { ownerId_key: { ownerId: id, key: body.key } }, select: { id: true } });
+    if (duplicate) throw new AppError(409, 'FIELD_KEY_EXISTS', 'A field with this key already exists at this scope.');
+    if (await fieldKeyIsInUse(id, body.key)) throw new AppError(409, 'FIELD_IN_USE', 'Tasks have values for this field. Migrate or clear them before overriding it.');
     const field = await prisma.customFieldDefinition.create({ data: { ownerId: id, ...body, options: body.options ?? [], required: body.required ?? false, position: body.position ?? 0 } });
     return reply.status(201).send({ data: field });
   });
@@ -299,11 +338,12 @@ export async function buildApp(options: { logger?: boolean } = {}) {
       const found = await prisma.user.count({ where: { id: { in: input.assigneeIds } } });
       if (found !== new Set(input.assigneeIds).size) badRequest('One or more assignees do not exist.', [{ path: 'assigneeIds', code: 'UNKNOWN_USER', message: 'Every assignee must be a seeded user.' }]);
     }
+    const lastTask = await prisma.task.findFirst({ where: { primaryListId: id, archivedAt: null }, orderBy: { position: 'desc' }, select: { position: true } });
     const task = await prisma.task.create({
       data: {
         primaryListId: id, title: input.title, statusId: input.statusId, description: input.description ?? null,
         priority: input.priority ?? 'none', dueDate: input.dueDate ? new Date(input.dueDate) : null,
-        position: 0, customValues: customFields as never,
+        position: (lastTask?.position ?? -1) + 1, customValues: customFields as never,
         ...(input.assigneeIds?.length ? { assignees: { create: input.assigneeIds.map((userId) => ({ userId })) } } : {}),
       }, include: { status: true, assignees: { include: { user: { select: { id: true, userKey: true, displayName: true } } } } },
     });
@@ -377,11 +417,12 @@ export async function buildApp(options: { logger?: boolean } = {}) {
     const nextValues = { ...values, ...(input.customFields ?? {}) };
     const issues = validateTaskConfiguration(input.statusId ?? task.statusId, statuses, nextValues, fields);
     if (issues.length) badRequest('Task cannot move until it matches the destination list configuration.', issues);
+    const lastDestinationTask = await prisma.task.findFirst({ where: { primaryListId: input.destinationListId, archivedAt: null, id: { not: id } }, orderBy: { position: 'desc' }, select: { position: true } });
     const moved = await prisma.$transaction((tx) => tx.task.update({
       where: { id }, data: {
         primaryListId: input.destinationListId,
         statusId: input.statusId ?? task.statusId,
-        position: input.position ?? 0,
+        position: input.position ?? (lastDestinationTask?.position ?? -1) + 1,
         customValues: nextValues as never,
       }, include: { status: true, primaryList: true },
     }));

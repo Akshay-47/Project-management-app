@@ -159,3 +159,30 @@ export async function createTask(userKey: string, listId: string, task: {
 export async function archiveTask(userKey: string, taskId: string) {
   return request<{ data: { id: string; archived: true } }>(userKey, `/tasks/${encodeURIComponent(taskId)}/archive`, { method: 'POST' })
 }
+
+export async function createStatus(userKey: string, ownerId: string, definition: {
+  key: string
+  name: string
+  category: StatusDefinition['category']
+  color: string
+}) {
+  const result = await request<{ data: StatusDefinition }>(userKey, `/lists/${encodeURIComponent(ownerId)}/statuses`, {
+    method: 'POST',
+    body: JSON.stringify(definition),
+  })
+  return result.data
+}
+
+export async function createField(userKey: string, ownerId: string, definition: {
+  key: string
+  name: string
+  type: FieldDefinition['type']
+  required: boolean
+  options?: FieldDefinition['options']
+}) {
+  const result = await request<{ data: FieldDefinition }>(userKey, `/lists/${encodeURIComponent(ownerId)}/fields`, {
+    method: 'POST',
+    body: JSON.stringify(definition),
+  })
+  return result.data
+}

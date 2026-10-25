@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ApiError,
   archiveTask,
+  createField,
+  createStatus,
   createTask,
   getCurrentUser,
   getListConfiguration,
@@ -31,6 +33,16 @@ function childrenOf(containers: Container[], parentId: string | null) {
   return containers.filter((container) => container.parentId === parentId)
 }
 
+function configurationScopes(containers: Container[], listId: string) {
+  const chain: Container[] = []
+  let cursor = containers.find((container) => container.id === listId)
+  while (cursor && cursor.type !== 'workspace') {
+    chain.unshift(cursor)
+    cursor = containers.find((container) => container.id === cursor?.parentId)
+  }
+  return chain.filter((container) => container.type === 'space' || container.type === 'folder' || container.type === 'list')
+}
+
 function displayDate(value: string | null) {
   if (!value) return 'No due date'
   return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(new Date(value))
@@ -54,6 +66,7 @@ function App() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showCreateTask, setShowCreateTask] = useState(false)
+  const [showConfiguration, setShowConfiguration] = useState(false)
   const [newTaskTitle, setNewTaskTitle] = useState('')
   const [createValues, setCreateValues] = useState<Record<string, unknown>>({})
 
@@ -171,7 +184,11 @@ function App() {
 
   async function handleDrop(taskId: string, statusId: string) {
     const task = tasks.find((item) => item.id === taskId)
-    if (task && task.statusId !== statusId) await changeTask(task, { statusId })
+    if (!task) return
+    const lastPosition = tasks
+      .filter((item) => item.statusId === statusId && item.id !== taskId)
+      .reduce((maximum, item) => Math.max(maximum, item.position), -1)
+    await changeTask(task, { statusId, position: lastPosition + 1 })
   }
 
   return (
@@ -209,13 +226,14 @@ function App() {
             <p className="list-description">A clear view of the work in progress, ready for your next big idea.</p><div className="list-meta"><span className="member-stack"><i className="avatar avatar-blue">AC</i><i className="avatar avatar-rose">BR</i><i className="avatar avatar-gold">CO</i></span><span>3 members</span><span className="meta-divider" /><span className="meta-dot" /> {visibleLists.length} lists in workspace</div>
           </section>
           <section className="stats-grid" aria-label="List summary"><article className="stat-card"><span className="stat-icon icon-violet">☷</span><div><small>Total tasks</small><strong>{tasks.length}</strong></div><span className="stat-foot">in this list</span></article><article className="stat-card"><span className="stat-icon icon-blue">◷</span><div><small>In progress</small><strong>{tasks.filter((task) => statuses.find((item) => item.id === task.statusId)?.category === 'active').length}</strong></div><span className="stat-foot">across columns</span></article><article className="stat-card"><span className="stat-icon icon-green">✓</span><div><small>Completed</small><strong>{tasks.filter((task) => statuses.find((item) => item.id === task.statusId)?.category === 'done').length}</strong></div><span className="stat-foot">tasks wrapped up</span></article><article className="stat-card"><span className="stat-icon icon-orange">⚑</span><div><small>Past due</small><strong>{overdueCount}</strong></div><span className="stat-foot">needs attention</span></article></section>
-          <section className="work-section"><div className="work-toolbar"><div className="view-tabs" role="tablist" aria-label="Task views"><button type="button" role="tab" aria-selected={viewMode === 'board'} className={viewMode === 'board' ? 'active' : ''} onClick={() => setViewMode('board')}><span>▦</span> Board</button><button type="button" role="tab" aria-selected={viewMode === 'list'} className={viewMode === 'list' ? 'active' : ''} onClick={() => setViewMode('list')}><span>☷</span> List</button></div><div className="toolbar-controls"><button type="button" className="secondary-button"><span>☷</span> Filter</button><button type="button" className="secondary-button"><span>↕</span> Sort</button><button type="button" className="icon-button more-button" aria-label="More view options">···</button></div></div>
-            {loading ? <div className="loading-state"><span className="spinner" /> Loading tasks…</div> : !selectedListId ? <div className="empty-state">This user does not have access to any lists.</div> : viewMode === 'board' ? <div className="board" aria-label="Kanban board">{statuses.map((status) => { const columnTasks = tasks.filter((task) => task.statusId === status.id); return <section className="board-column" key={status.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain'); if (id) void handleDrop(id, status.id) }}><header className="column-header"><div className="column-title"><span className="status-dot" style={{ backgroundColor: status.color }} /><h2>{status.name}</h2><span className="column-count">{columnTasks.length}</span></div><button className="icon-button" type="button" aria-label={`More options for ${status.name}`}>···</button></header><div className="column-cards">{columnTasks.map((task) => <TaskCard key={task.id} task={task} onOpen={() => setSelectedTask(task)} />)}</div><button className="add-card" type="button" onClick={() => { setCreateValues({}); setShowCreateTask(true) }}>＋ Add task</button></section> })}</div> : <div className="task-table-wrap"><table className="task-table"><thead><tr><th>Task name</th><th>Status</th><th>Assignee</th><th>Priority</th><th>Due date</th>{fieldsForTable.map((field) => <th key={field.key}>{field.name}</th>)}</tr></thead><tbody>{tasks.map((task) => <tr key={task.id} onClick={() => setSelectedTask(task)}><td><span className="task-check">○</span><strong>{task.title}</strong></td><td><span className="table-status"><i className="status-dot" style={{ backgroundColor: task.status.color }} />{task.status.name}</span></td><td><AssigneeList task={task} /></td><td><PriorityBadge priority={task.priority} /></td><td>{displayDate(task.dueDate)}</td>{fieldsForTable.map((field) => <td key={field.key}>{formatFieldValue(task.customValues, field)}</td>)}</tr>)}</tbody></table></div>}
+          <section className="work-section"><div className="work-toolbar"><div className="view-tabs" role="tablist" aria-label="Task views"><button type="button" role="tab" aria-selected={viewMode === 'board'} className={viewMode === 'board' ? 'active' : ''} onClick={() => setViewMode('board')}><span>▦</span> Board</button><button type="button" role="tab" aria-selected={viewMode === 'list'} className={viewMode === 'list' ? 'active' : ''} onClick={() => setViewMode('list')}><span>☷</span> List</button></div><div className="toolbar-controls">{user?.role === 'admin' && <button type="button" className="secondary-button" onClick={() => setShowConfiguration(true)}><span>⚙</span> Configure</button>}<button type="button" className="secondary-button"><span>☷</span> Filter</button><button type="button" className="secondary-button"><span>↕</span> Sort</button><button type="button" className="icon-button more-button" aria-label="More view options">···</button></div></div>
+            {loading ? <div className="loading-state"><span className="spinner" /> Loading tasks…</div> : !selectedListId ? <div className="empty-state">This user does not have access to any lists.</div> : viewMode === 'board' ? <div className="board" aria-label="Kanban board">{statuses.map((status) => { const columnTasks = tasks.filter((task) => task.statusId === status.id).toSorted((first, second) => first.position - second.position); return <section className="board-column" key={status.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain'); if (id) void handleDrop(id, status.id) }}><header className="column-header"><div className="column-title"><span className="status-dot" style={{ backgroundColor: status.color }} /><h2>{status.name}</h2><span className="column-count">{columnTasks.length}</span></div><button className="icon-button" type="button" aria-label={`More options for ${status.name}`}>···</button></header><div className="column-cards">{columnTasks.map((task) => <TaskCard key={task.id} task={task} onOpen={() => setSelectedTask(task)} />)}</div><button className="add-card" type="button" onClick={() => { setCreateValues({}); setShowCreateTask(true) }}>＋ Add task</button></section> })}</div> : <div className="task-table-wrap"><table className="task-table"><thead><tr><th>Task name</th><th>Status</th><th>Assignee</th><th>Priority</th><th>Due date</th>{fieldsForTable.map((field) => <th key={field.key}>{field.name}</th>)}</tr></thead><tbody>{tasks.toSorted((first, second) => first.position - second.position).map((task) => <tr key={task.id} onClick={() => setSelectedTask(task)}><td><span className="task-check">○</span><strong>{task.title}</strong></td><td><span className="table-status"><i className="status-dot" style={{ backgroundColor: task.status.color }} />{task.status.name}</span></td><td><AssigneeList task={task} /></td><td><PriorityBadge priority={task.priority} /></td><td>{displayDate(task.dueDate)}</td>{fieldsForTable.map((field) => <td key={field.key}>{formatFieldValue(task.customValues, field)}</td>)}</tr>)}</tbody></table></div>}
           </section>
         </div>
       </main>
       {selectedTask && <TaskDrawer task={selectedTask} statuses={statuses} fields={fields} saving={saving} onClose={() => setSelectedTask(null)} onSave={saveTaskDetails} onArchive={() => void handleArchiveTask(selectedTask)} />}
       {showCreateTask && selectedList && <CreateTaskDialog title={newTaskTitle} setTitle={setNewTaskTitle} fields={fields} values={createValues} setValues={setCreateValues} saving={saving} onClose={() => setShowCreateTask(false)} onSubmit={handleCreateTask} />}
+      {showConfiguration && selectedListId && <ConfigurationDialog userKey={userKey} scopes={configurationScopes(containers, selectedListId)} saving={saving} onClose={() => setShowConfiguration(false)} onCreated={reloadTasks} />}
     </div>
   )
 }
@@ -259,6 +277,55 @@ function TaskDrawer({ task, statuses, fields, saving, onClose, onSave, onArchive
 
 function CreateTaskDialog({ title, setTitle, fields, values, setValues, saving, onClose, onSubmit }: { title: string; setTitle: (value: string) => void; fields: FieldDefinition[]; values: Record<string, unknown>; setValues: (value: Record<string, unknown>) => void; saving: boolean; onClose: () => void; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void }) {
   return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="create-dialog" role="dialog" aria-modal="true" aria-labelledby="create-task-title"><header className="drawer-header"><h2 id="create-task-title">Create a task</h2><button className="icon-button" type="button" aria-label="Close create task" onClick={onClose}>×</button></header><form onSubmit={onSubmit}><div className="drawer-content"><label className="form-field"><span className="field-label">Task name</span><input value={title} onChange={(event) => setTitle(event.target.value)} required maxLength={500} placeholder="What needs to get done?" /></label>{fields.filter((field) => field.required).map((field) => <label className="form-field" key={field.key} htmlFor={`field-${field.key}`}><span className="field-label">{field.name}<i>Required</i></span><FieldInput field={field} value={values[field.key]} onChange={(value) => setValues({ ...values, [field.key]: value })} /></label>)}</div><footer className="drawer-footer"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={saving || !title.trim()}>{saving ? 'Creating…' : 'Create task'}</button></footer></form></section></div>
+}
+
+function ConfigurationDialog({ userKey, scopes, saving, onClose, onCreated }: { userKey: string; scopes: Container[]; saving: boolean; onClose: () => void; onCreated: () => Promise<void> }) {
+  const [scopeId, setScopeId] = useState(scopes.at(-1)?.id ?? '')
+  const [message, setMessage] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  async function submitStatus(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    setFormError(null)
+    try {
+      await createStatus(userKey, scopeId, {
+        key: String(form.get('key')),
+        name: String(form.get('name')),
+        category: String(form.get('category')) as StatusDefinition['category'],
+        color: String(form.get('color')),
+      })
+      await onCreated()
+      setMessage('Status added. It is now part of this scope’s resolved configuration.')
+      event.currentTarget.reset()
+    } catch (cause: unknown) {
+      setFormError(cause instanceof Error ? cause.message : 'Could not add status.')
+    }
+  }
+
+  async function submitField(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const type = String(form.get('type')) as FieldDefinition['type']
+    const optionLabels = String(form.get('options') ?? '').split(',').map((label) => label.trim()).filter(Boolean)
+    setFormError(null)
+    try {
+      await createField(userKey, scopeId, {
+        key: String(form.get('key')),
+        name: String(form.get('name')),
+        type,
+        required: form.get('required') === 'on',
+        ...(type === 'single_select' || type === 'multi_select' ? { options: optionLabels.map((label) => ({ id: label.toLowerCase().replaceAll(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''), label })) } : {}),
+      })
+      await onCreated()
+      setMessage('Custom field added to the selected scope and its descendant lists.')
+      event.currentTarget.reset()
+    } catch (cause: unknown) {
+      setFormError(cause instanceof Error ? cause.message : 'Could not add custom field.')
+    }
+  }
+
+  return <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="config-dialog" role="dialog" aria-modal="true" aria-label="List configuration"><header className="drawer-header"><div><h2>List configuration</h2><p>Define statuses and fields at a scope; child lists inherit them.</p></div><button className="icon-button" type="button" aria-label="Close configuration" onClick={onClose}>×</button></header><div className="config-body"><label className="form-field"><span className="field-label">Configuration scope</span><select value={scopeId} onChange={(event) => setScopeId(event.target.value)}>{scopes.map((scope) => <option key={scope.id} value={scope.id}>{scope.name} · {scope.type}</option>)}</select></label>{message && <div className="success-banner" role="status">{message}</div>}{formError && <div className="error-banner" role="alert">{formError}</div>}<form className="config-form" onSubmit={submitStatus}><h3>Add a status</h3><label className="form-field"><span className="field-label">Stable key</span><input name="key" required pattern="[a-z][a-z0-9_]{1,49}" placeholder="in_review" /></label><label className="form-field"><span className="field-label">Display name</span><input name="name" required maxLength={80} placeholder="In review" /></label><div className="config-form-row"><label className="form-field"><span className="field-label">Category</span><select name="category"><option value="not_started">Not started</option><option value="active">Active</option><option value="done">Done</option><option value="closed">Closed</option></select></label><label className="form-field"><span className="field-label">Color</span><input name="color" type="color" defaultValue="#7c69e8" /></label></div><button className="secondary-button" type="submit" disabled={saving}>＋ Add status at this scope</button></form><form className="config-form" onSubmit={submitField}><h3>Add a custom field</h3><label className="form-field"><span className="field-label">Stable key</span><input name="key" required pattern="[a-z][a-z0-9_]{1,49}" placeholder="release_train" /></label><label className="form-field"><span className="field-label">Display name</span><input name="name" required maxLength={80} placeholder="Release train" /></label><label className="form-field"><span className="field-label">Type</span><select name="type"><option value="text">Text</option><option value="number">Number</option><option value="single_select">Single select</option><option value="multi_select">Multi select</option><option value="date">Date</option><option value="checkbox">Checkbox</option></select></label><label className="form-field"><span className="field-label">Select options, comma separated</span><input name="options" placeholder="Alpha, Beta" /></label><label className="checkbox-row"><input name="required" type="checkbox" /> Required for tasks in descendant lists</label><button className="secondary-button" type="submit" disabled={saving}>＋ Add custom field at this scope</button></form><p className="config-note">Changing an in-use status or field is blocked to protect task data. Additions inherit to descendant lists; same-key overrides are permitted only when unused.</p></div></section></div>
 }
 
 export default App
