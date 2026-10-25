@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -27,6 +27,7 @@ const containers: Container[] = [
   { id: 'list-inbox', type: 'list', name: 'Inbox', parentId: 'folder-q2', position: 0, visibility: 'public', archivedAt: null },
   { id: 'list-backlog', type: 'list', name: 'Backlog', parentId: 'folder-q2', position: 1, visibility: 'public', archivedAt: null },
 ]
+const privateList: Container = { id: 'list-roadmap', type: 'list', name: 'Roadmap', parentId: 'folder-q2', position: 2, visibility: 'private', archivedAt: null }
 const statuses: StatusDefinition[] = [
   { id: 'status-todo', key: 'todo', name: 'To do', category: 'not_started', color: '#8492a6', position: 0 },
   { id: 'status-progress', key: 'in_progress', name: 'Doing', category: 'active', color: '#1e88a8', position: 1 },
@@ -43,7 +44,10 @@ const task: Task = {
   assignees: [{ user: { id: 'user-bob', userKey: 'bob', displayName: 'Bob Rivera' } }], position: 0,
 }
 
-afterEach(() => vi.clearAllMocks())
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
 
 describe('Flowboard list workflow', () => {
   it('selects a list, shows resolved board columns, edits a custom field, and saves', async () => {
@@ -72,5 +76,24 @@ describe('Flowboard list workflow', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() => expect(updateTask).toHaveBeenCalledWith('alice', 'task-1234', expect.objectContaining({ customFields: expect.objectContaining({ estimate: 8 }) })))
+  })
+
+  it('removes private lists when switching from Alice to Bob', async () => {
+    vi.mocked(getCurrentUser).mockImplementation(async (userKey) => ({
+      ...user,
+      userKey,
+      displayName: userKey === 'alice' ? 'Alice Chen' : 'Bob Rivera',
+      role: userKey === 'alice' ? 'admin' : 'member',
+    }))
+    vi.mocked(getTree).mockImplementation(async (userKey) => userKey === 'alice' ? [...containers, privateList] : containers)
+    vi.mocked(getListConfiguration).mockResolvedValue({ statuses, fields })
+    vi.mocked(getTasks).mockResolvedValue([])
+
+    render(<App />)
+    expect(await screen.findByRole('button', { name: /Roadmap/ })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Demo user'), { target: { value: 'bob' } })
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Roadmap/ })).not.toBeInTheDocument())
+    expect(getTree).toHaveBeenLastCalledWith('bob')
   })
 })

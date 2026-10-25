@@ -276,7 +276,7 @@ function formatFieldValue(values: Record<string, unknown>, field: FieldDefinitio
 
 function FieldInput({ field, value, onChange }: { field: FieldDefinition; value: unknown; onChange?: (value: unknown) => void }) {
   const common = { name: `field:${field.key}`, id: `field-${field.key}` }
-  if (field.type === 'checkbox') return <label className="checkbox-row"><input {...common} type="checkbox" defaultChecked={Boolean(value)} onChange={(event) => onChange?.(event.target.checked)} /> {field.name}</label>
+  if (field.type === 'checkbox') return <input className="checkbox-input" {...common} type="checkbox" defaultChecked={Boolean(value)} required={field.required} onChange={(event) => onChange?.(event.target.checked)} />
   if (field.type === 'single_select') return <select {...common} defaultValue={String(value ?? '')} onChange={(event) => onChange?.(event.target.value)}><option value="">Choose…</option>{field.options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select>
   if (field.type === 'multi_select') return <select {...common} multiple defaultValue={Array.isArray(value) ? value.map(String) : []} onChange={(event) => onChange?.(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{field.options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select>
   const type = field.type === 'number' ? 'number' : field.type === 'date' ? 'date' : 'text'
