@@ -28,6 +28,11 @@ COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_m
 COPY --from=build --chown=node:node /app/apps/api/package.json ./apps/api/package.json
 COPY --from=build --chown=node:node /app/apps/api/dist ./apps/api/dist
 COPY --from=build --chown=node:node /app/package.json ./package.json
+# Include prisma schema, migrations, and seed for migrate+seed on Railway startup
+COPY --from=build --chown=node:node /app/apps/api/prisma ./apps/api/prisma
+COPY --from=build --chown=node:node /app/prisma.config.ts ./prisma.config.ts
+COPY --chown=node:node apps/api/start.sh ./start.sh
+RUN chmod +x ./start.sh
 USER node
 EXPOSE 3000
 CMD ["node", "apps/api/dist/server.js"]
