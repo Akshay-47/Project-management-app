@@ -90,6 +90,7 @@ function App() {
     container?: Container
   } | null>(null)
   const [containerMenuId, setContainerMenuId] = useState<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
 
   const selectedList = containers.find((item) => item.id === selectedListId) ?? null
   const visibleLists = containers.filter((item) => item.type === 'list')
@@ -250,6 +251,27 @@ function App() {
     await reloadTree()
   }
 
+  async function handleReorderContainer(draggedId: string, targetId: string) {
+    // Find siblings of the dragged item and compute the new position
+    const dragged = containers.find((c) => c.id === draggedId)
+    const target = containers.find((c) => c.id === targetId)
+    if (!dragged || !target || dragged.id === target.id || dragged.parentId !== target.parentId) return
+    const siblings = containers
+      .filter((c) => c.parentId === dragged.parentId && c.type === dragged.type)
+      .sort((a, b) => a.position - b.position)
+    // Remove dragged from list and insert before target
+    const without = siblings.filter((c) => c.id !== draggedId)
+    const targetIndex = without.findIndex((c) => c.id === targetId)
+    without.splice(targetIndex, 0, dragged)
+    // Assign positions 0..n and persist each changed item
+    await Promise.all(
+      without.map((c, index) =>
+        c.position !== index ? patchContainer(userKey, c.id, { position: index }) : Promise.resolve()
+      )
+    )
+    await reloadTree()
+  }
+
   return (
     <div className="flowboard-shell">
       <aside className="sidebar">
@@ -258,7 +280,14 @@ function App() {
         <div className="sidebar-label">WORKSPACE</div>
         <nav className="workspace-tree" aria-label="Workspace lists">
           {containers.filter((item) => item.type === 'space').map((space) => (
-            <section className="tree-space" key={space.id}>
+            <section className="tree-space" key={space.id}
+              draggable={user?.role === 'admin'}
+              onDragStart={(e) => { e.dataTransfer.setData('text/plain', space.id); e.dataTransfer.effectAllowed = 'move' }}
+              onDragOver={(e) => { e.preventDefault(); setDragOverId(space.id) }}
+              onDragLeave={() => setDragOverId(null)}
+              onDrop={(e) => { e.preventDefault(); setDragOverId(null); const id = e.dataTransfer.getData('text/plain'); if (id && id !== space.id) void handleReorderContainer(id, space.id) }}
+              style={dragOverId === space.id ? { outline: '2px solid var(--accent)', borderRadius: 6 } : undefined}
+            >
               <div className="tree-heading">
                 <span className="tree-caret">⌄</span><span className="space-dot" />{space.name}
                 {user?.role === 'admin' && (
@@ -278,7 +307,14 @@ function App() {
                 )}
               </div>
               {childrenOf(containers, space.id).map((folder) => (
-                <div className="tree-folder" key={folder.id}>
+                <div className="tree-folder" key={folder.id}
+                  draggable={user?.role === 'admin'}
+                  onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.setData('text/plain', folder.id); e.dataTransfer.effectAllowed = 'move' }}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverId(folder.id) }}
+                  onDragLeave={() => setDragOverId(null)}
+                  onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverId(null); const id = e.dataTransfer.getData('text/plain'); if (id && id !== folder.id) void handleReorderContainer(id, folder.id) }}
+                  style={dragOverId === folder.id ? { outline: '2px solid var(--accent)', borderRadius: 6 } : undefined}
+                >
                   <div className="tree-heading folder-heading">
                     <span className="tree-caret">⌄</span><span className="folder-icon">▰</span>{folder.name}
                     {user?.role === 'admin' && (
@@ -298,7 +334,14 @@ function App() {
                     )}
                   </div>
                   {childrenOf(containers, folder.id).map((list) => (
-                    <div key={list.id} className="tree-list-row">
+                    <div key={list.id} className="tree-list-row"
+                      draggable={user?.role === 'admin'}
+                      onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.setData('text/plain', list.id); e.dataTransfer.effectAllowed = 'move' }}
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverId(list.id) }}
+                      onDragLeave={() => setDragOverId(null)}
+                      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverId(null); const id = e.dataTransfer.getData('text/plain'); if (id && id !== list.id) void handleReorderContainer(id, list.id) }}
+                      style={dragOverId === list.id ? { outline: '2px solid var(--accent)', borderRadius: 6 } : undefined}
+                    >
                       <button type="button" className={`tree-list ${selectedListId === list.id ? 'selected' : ''}`} onClick={() => { setLoading(true); setError(null); setTasks([]); setSelectedListId(list.id) }}
                         aria-label={list.name}>
                         <span className="list-icon">☷</span><span>{list.name}</span>
